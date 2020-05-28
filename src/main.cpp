@@ -3,6 +3,10 @@
 #include "esp_system.h"
 #include "HX711.h"
 #include <Wire.h>
+#include <WiFi.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include "EEPROM.h"
 
 // Configure TinyGSM library
 #define TINY_GSM_MODEM_SIM800   // Modem is SIM800
@@ -35,7 +39,8 @@ const char gprsPass[] = "3gprs"; // Password
 const char simPIN[] = "";        // SIM card PIN code, if any
 
 // Server details
-const char server[] = "34.70.87.0";
+//const char server[] = "34.70.87.0";
+const char server[] = "feeder.maxgrow.id";
 //const char resource[] = "/update?api_key=C6VTEL02YIAII3VM&field1=90.5";
 
 //const int wdtTimeout = 3000; //time in ms to trigger the watchdog
@@ -43,7 +48,7 @@ const char server[] = "34.70.87.0";
 
 TinyGsm modem(SerialAT);
 TinyGsmClient client(modem);
-HttpClient http(client, server, 8080);
+HttpClient http(client, server, 80);
 
 bool setPowerBoostKeepOn(int en)
 {
@@ -61,12 +66,148 @@ bool setPowerBoostKeepOn(int en)
 }
 
 HX711 scales[4];
+
+AsyncWebServer serverX(80);
+const char *lcoffset[] = {"lcoff0", "lcoff1", "lcoff2", "lcoff3"};
+const char *lcscale[] = {"lcscale0", "lcscale1", "lcscale2", "lcscale3"};
+const char *ssid = "MAXGROW-IoT";
+const char *password = "testpassword";
+const char *totaloff = "totaloff";
+void notFound(AsyncWebServerRequest *request)
+{
+    request->send(404, "text/plain", "Not found");
+}
+
+struct Setting
+{
+    float scale[4];
+    float offset[4];
+    float totalOffset;
+};
+
+Setting mySetting;
+
 void setup()
 {
     // Set console baud rate
     SerialMon.begin(115200);
-    delay(10);
+    delay(1000);
+    if (!EEPROM.begin(1000))
+    {
+        Serial.println("Failed to initialise EEPROM");
+        Serial.println("Restarting...");
 
+        ESP.restart();
+    }
+    EEPROM.get(2, mySetting);
+    Serial.println("Read config from eeprom");
+    for (int i = 0; i < 4; i++)
+    {
+        Serial.print("Scale:");
+        Serial.println(mySetting.scale[i]);
+        Serial.print("Offset:");
+        Serial.println(mySetting.offset[i]);
+    }
+    Serial.print("TotalOffset:");
+    Serial.println(mySetting.totalOffset);
+    delay(10);
+    WiFi.softAP(ssid, password);
+    Serial.println("Wait 100 ms for AP_START...");
+    delay(100);
+
+    Serial.println("Set softAPConfig");
+    IPAddress Ip(192, 168, 1, 1);
+    IPAddress NMask(255, 255, 255, 0);
+    WiFi.softAPConfig(Ip, Ip, NMask);
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.softAPIP());
+    serverX.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", "Hello, world");
+    });
+    // Send a GET request to <IP>/get?message=<message>
+    serverX.on("/calibrate", HTTP_GET, [](AsyncWebServerRequest *request) {
+        String message;
+        //parse offset
+        for (int i = 0; i < 4; i++)
+        {
+            if (request->hasParam(lcoffset[i]))
+            {
+                message = request->getParam(lcoffset[i])->value();
+                mySetting.offset[i] = message.toFloat();
+            }
+            else
+            {
+                message = "No message sent";
+            }
+            //parse scale
+            if (request->hasParam(lcscale[i]))
+            {
+                message = request->getParam(lcscale[i])->value();
+                mySetting.scale[i] = message.toFloat();
+            }
+            else
+            {
+                message = "No message sent";
+            }
+        }
+        //parse total
+        if (request->hasParam(totaloff))
+        {
+            message = request->getParam(totaloff)->value();
+            mySetting.totalOffset = message.toFloat();
+        }
+        else
+        {
+            message = "No message sent";
+        }
+        EEPROM.put(2, mySetting);
+        EEPROM.commit();
+        Serial.println("Read config from eeprom");
+        for (int i = 0; i < 4; i++)
+        {
+            Serial.print("Scale:");
+            Serial.println(mySetting.scale[i]);
+            Serial.print("Offset:");
+            Serial.println(mySetting.offset[i]);
+        }
+        Serial.print("TotalOffset:");
+        Serial.println(mySetting.totalOffset);
+        request->send(200, "text/plain", "Hello, Calibrated !");
+    });
+    // Send a GET request to <IP>/get?message=<message>
+    serverX.on("/get", HTTP_GET, [](AsyncWebServerRequest *request) {
+        String message;
+        //parse offset
+        double sum = 0.0;
+        double res;
+        for (int i = 0; i < 4; i++)
+        {
+            if (scales[i].is_ready())
+            {
+                double reading = scales[i].get_value();
+
+                res = reading * mySetting.scale[i] + mySetting.offset[i];
+                sum += res;
+                //            SerialMon.print(i);
+                //          SerialMon.print(" HX711 reading: ");
+                //        SerialMon.println(reading);
+                message += "loadcell" + String(i) + ": " + String(res, 2) + " kg. raw:" + String(reading, 2) + " scale:" + String(mySetting.scale[i], 2) + " offset:" + String(mySetting.offset[i], 2) + "\r\n";
+            }
+            else
+            {
+                SerialMon.print(i);
+                SerialMon.println("HX711 not found.");
+            }
+        }
+        message += "total offset: " + String(mySetting.totalOffset, 2) + "\r\n";
+        message += "calculated total: " + String(sum + mySetting.totalOffset);
+
+        //  EEPROM.put(2, mySetting);
+        request->send(200, "text/plain", "Value:\r\n" + message);
+    });
+
+    serverX.onNotFound(notFound);
+    serverX.begin();
     // Keep power when running from battery
     Wire.begin(I2C_SDA, I2C_SCL);
     bool isOk = setPowerBoostKeepOn(1);
@@ -74,19 +215,19 @@ void setup()
 
     //setup hx711
     scales[0].begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-    scales[1].begin(34, 13);//kayaknya 26 nih maslah , kudu ganti     
+    scales[1].begin(34, 13);
     scales[2].begin(33, 25);
     scales[3].begin(35, 32);
     //scale.set_scale(2280.f);
     delay(100);
-//    scales[0].tare();
-  //  scales[1].tare();
-  //  scales[2].tare();
-  //  scales[3].tare();
-    
+    //    scales[0].tare();
+    //  scales[1].tare();
+    //  scales[2].tare();
+    //  scales[3].tare();
+
     //test hx711
- //SerialMon.print("fasf");
-   /*
+    //SerialMon.print("fasf");
+    /*
     while (true)
     {
         for (int i = 0; i < 4; i++)
@@ -176,18 +317,18 @@ bailout:
         goto bailout;
     }
     SerialMon.println(" OK");
- 
+
     while (true)
     {
-  SerialMon.print(F("Getting measurement from load cells"));
+        SerialMon.println(F("Getting measurement from load cells"));
 
- for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 4; i++)
         {
             if (scales[i].is_ready())
             {
                 double reading = scales[i].get_value();
 
-                a[i] = reading;
+                a[i] = reading * mySetting.scale[i] + mySetting.offset[i];
                 //            SerialMon.print(i);
                 //          SerialMon.print(" HX711 reading: ");
                 //        SerialMon.println(reading);
@@ -206,12 +347,14 @@ bailout:
         SerialMon.print(" ");
         SerialMon.println(a[3]);
 
-        sprintf(buffer, "/post?id=1&lc0=%.02f&lc1=%.02f&lc2=%.02f&lc3=%.02f", a[0],a[1],a[2],a[3]);
+        double sumoff = a[0] + a[1] + a[2] + a[3] + mySetting.totalOffset;
+        //   sprintf(buffer, "/post?id=1&lc0=%.02f&lc1=%.02f&lc2=%.02f&lc3=%.02f", a[0], a[1], a[2], a[3]);
+        sprintf(buffer, "/api/payload?device_id=1&payload=%.02f", sumoff);
 
         SerialMon.print(F("Performing HTTP GET request... "));
 
         http.connectionKeepAlive();
-        int err = http.get(buffer);
+        int err = http.post(buffer);
         if (err != 0)
         {
             SerialMon.print(F("failed to connect "));
