@@ -33,9 +33,9 @@
 #define SerialAT Serial1
 
 // GPRS credentials (leave empty, if missing)
-const char apn[] = "3gprs";      // Your APN
-const char gprsUser[] = "3gprs"; // User
-const char gprsPass[] = "3gprs"; // Password
+//const char apn[] = "3gprs";      // Your APN
+//const char gprsUser[] = "3gprs"; // User
+//const char gprsPass[] = "3gprs"; // Password
 const char simPIN[] = "";        // SIM card PIN code, if any
 
 // Server details
@@ -64,12 +64,19 @@ bool setPowerBoostKeepOn(int en)
     }
     return Wire.endTransmission() == 0;
 }
-
+struct APNSetting
+{
+    char apn[20];
+    char user[20];
+    char pass[20];
+};
 HX711 scales[4];
 
 AsyncWebServer serverX(80);
 const char *lcoffset[] = {"lcoff0", "lcoff1", "lcoff2", "lcoff3"};
 const char *lcscale[] = {"lcscale0", "lcscale1", "lcscale2", "lcscale3"};
+
+const char *apnSet[] = {"apn", "user", "pass"};
 const char *ssid = "MAXGROW-IoT";
 const char *password = "testpassword";
 const char *totaloff = "totaloff";
@@ -86,7 +93,7 @@ struct Setting
 };
 
 Setting mySetting;
-
+APNSetting myInternet;
 void setup()
 {
     // Set console baud rate
@@ -100,6 +107,7 @@ void setup()
         ESP.restart();
     }
     EEPROM.get(2, mySetting);
+     EEPROM.get(100, myInternet);
     Serial.println("Read config from eeprom");
     for (int i = 0; i < 4; i++)
     {
@@ -121,12 +129,45 @@ void setup()
     WiFi.softAPConfig(Ip, Ip, NMask);
     Serial.print("IP Address: ");
     Serial.println(WiFi.softAPIP());
-    serverX.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(200, "text/plain", "Hello, world");
+    serverX.on("/set_apn", HTTP_GET, [](AsyncWebServerRequest *request) {
+        String message;
+        bool valid = true;
+        for (int i = 0; i < 3; i++)
+        {
+            if (request->hasParam(apnSet[i]))
+            {
+                message = request->getParam(apnSet[i])->value();
+                switch (i)
+                {
+                case 0:
+                    message.toCharArray(myInternet.apn, 20);
+                    break;
+                case 1:
+                    message.toCharArray(myInternet.user, 20);
+                    break;
+                case 2:
+                    message.toCharArray(myInternet.pass, 20);
+                    break;
+                }
+            }
+            else
+            { valid = false;
+                message = "No message sent";
+            }
+        }
+if( valid) {
+EEPROM.put(100, myInternet);
+         EEPROM.commit();
+        request->send(200, "text/plain", "APN Set! Please restart");
+}else{
+    request->send(400, "text/plain", "Data is not complete");
+}
+         
     });
     // Send a GET request to <IP>/get?message=<message>
     serverX.on("/calibrate", HTTP_GET, [](AsyncWebServerRequest *request) {
         String message;
+        bool valid = true;
         //parse offset
         for (int i = 0; i < 4; i++)
         {
@@ -147,6 +188,7 @@ void setup()
             }
             else
             {
+                valid = false;
                 message = "No message sent";
             }
         }
@@ -158,8 +200,11 @@ void setup()
         }
         else
         {
+            valid = false;
             message = "No message sent";
         }
+
+        if (valid){
         EEPROM.put(2, mySetting);
         EEPROM.commit();
         Serial.println("Read config from eeprom");
@@ -173,6 +218,11 @@ void setup()
         Serial.print("TotalOffset:");
         Serial.println(mySetting.totalOffset);
         request->send(200, "text/plain", "Hello, Calibrated !");
+        }else{
+   request->send(400, "text/plain", "Data is not complete!");
+    
+        }
+
     });
     // Send a GET request to <IP>/get?message=<message>
     serverX.on("/get", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -191,10 +241,11 @@ void setup()
                 //            SerialMon.print(i);
                 //          SerialMon.print(" HX711 reading: ");
                 //        SerialMon.println(reading);
-                message += "loadcell" + String(i) + ": " + String(res, 2) + " kg. raw:" + String(reading, 2) + " scale:" + String(mySetting.scale[i], 2) + " offset:" + String(mySetting.offset[i], 2) + "\r\n";
+                message += "loadcell" + String(i) + "kg: " + String(res, 2) + ",raw:" + String(reading, 2) + ",scale:" + String(mySetting.scale[i], 2) + ",offset:" + String(mySetting.offset[i], 2) + "\r\n";
             }
             else
             {
+                message += "loadcell" + String(i) + "kg:NaN,raw:NaN,scale:" + String(mySetting.scale[i], 2) + ",offset:" + String(mySetting.offset[i], 2) + "\r\n";
                 SerialMon.print(i);
                 SerialMon.println("HX711 not found.");
             }
@@ -309,8 +360,8 @@ bailout:
     }
 
     SerialMon.print(F("Connecting to APN: "));
-    SerialMon.print(apn);
-    if (!modem.gprsConnect(apn, gprsUser, gprsPass))
+    SerialMon.print(myInternet.apn);
+    if (!modem.gprsConnect(myInternet.apn, myInternet.user, myInternet.pass))
     {
         SerialMon.println(" fail");
         delay(10000);
