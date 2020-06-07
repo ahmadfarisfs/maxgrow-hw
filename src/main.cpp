@@ -36,7 +36,7 @@
 //const char apn[] = "3gprs";      // Your APN
 //const char gprsUser[] = "3gprs"; // User
 //const char gprsPass[] = "3gprs"; // Password
-const char simPIN[] = "";        // SIM card PIN code, if any
+const char simPIN[] = ""; // SIM card PIN code, if any
 
 // Server details
 //const char server[] = "34.70.87.0";
@@ -80,6 +80,8 @@ const char *apnSet[] = {"apn", "user", "pass"};
 const char *ssid = "MAXGROW-IoT";
 const char *password = "testpassword";
 const char *totaloff = "totaloff";
+const char *samplingPeriod = "sampp";
+
 void notFound(AsyncWebServerRequest *request)
 {
     request->send(404, "text/plain", "Not found");
@@ -90,6 +92,7 @@ struct Setting
     float scale[4];
     float offset[4];
     float totalOffset;
+    long samplingPeriod;
 };
 
 Setting mySetting;
@@ -107,7 +110,7 @@ void setup()
         ESP.restart();
     }
     EEPROM.get(2, mySetting);
-     EEPROM.get(100, myInternet);
+    EEPROM.get(100, myInternet);
     Serial.println("Read config from eeprom");
     for (int i = 0; i < 4; i++)
     {
@@ -151,18 +154,21 @@ void setup()
                 }
             }
             else
-            { valid = false;
+            {
+                valid = false;
                 message = "No message sent";
             }
         }
-if( valid) {
-EEPROM.put(100, myInternet);
-         EEPROM.commit();
-        request->send(200, "text/plain", "APN Set! Please restart");
-}else{
-    request->send(400, "text/plain", "Data is not complete");
-}
-         
+        if (valid)
+        {
+            EEPROM.put(100, myInternet);
+            EEPROM.commit();
+            request->send(200, "text/plain", "APN Set! Please restart");
+        }
+        else
+        {
+            request->send(400, "text/plain", "Data is not complete");
+        }
     });
     // Send a GET request to <IP>/get?message=<message>
     serverX.on("/calibrate", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -174,7 +180,10 @@ EEPROM.put(100, myInternet);
             if (request->hasParam(lcoffset[i]))
             {
                 message = request->getParam(lcoffset[i])->value();
-                mySetting.offset[i] = message.toFloat();
+                if (message != ""){
+                      mySetting.offset[i] = message.toFloat();
+    
+                }
             }
             else
             {
@@ -184,11 +193,13 @@ EEPROM.put(100, myInternet);
             if (request->hasParam(lcscale[i]))
             {
                 message = request->getParam(lcscale[i])->value();
+               
+                 if (message != ""){
                 mySetting.scale[i] = message.toFloat();
-            }
+            }}
             else
             {
-                valid = false;
+                //  valid = false;
                 message = "No message sent";
             }
         }
@@ -196,33 +207,46 @@ EEPROM.put(100, myInternet);
         if (request->hasParam(totaloff))
         {
             message = request->getParam(totaloff)->value();
+            if (message != ""){
             mySetting.totalOffset = message.toFloat();
+        }}
+        else
+        {
+            //  valid = false;
+            message = "No message sent";
+        }
+        //prse sampling periode
+        if (request->hasParam(samplingPeriod))
+        {
+            message = request->getParam(samplingPeriod)->value();
+              if (message != ""){
+            mySetting.samplingPeriod = message.toInt();
+        }}
+        else
+        {
+          //  valid = false;
+            message = "No message sent";
+        }
+        if (valid)
+        {
+            EEPROM.put(2, mySetting);
+            EEPROM.commit();
+            Serial.println("Write config to eeprom");
+            for (int i = 0; i < 4; i++)
+            {
+                Serial.print("Scale:");
+                Serial.println(mySetting.scale[i]);
+                Serial.print("Offset:");
+                Serial.println(mySetting.offset[i]);
+            }
+            Serial.print("TotalOffset:");
+            Serial.println(mySetting.totalOffset);
+            request->send(200, "text/plain", "Hello, Calibrated !");
         }
         else
         {
-            valid = false;
-            message = "No message sent";
+            request->send(400, "text/plain", "Data is not complete!");
         }
-
-        if (valid){
-        EEPROM.put(2, mySetting);
-        EEPROM.commit();
-        Serial.println("Read config from eeprom");
-        for (int i = 0; i < 4; i++)
-        {
-            Serial.print("Scale:");
-            Serial.println(mySetting.scale[i]);
-            Serial.print("Offset:");
-            Serial.println(mySetting.offset[i]);
-        }
-        Serial.print("TotalOffset:");
-        Serial.println(mySetting.totalOffset);
-        request->send(200, "text/plain", "Hello, Calibrated !");
-        }else{
-   request->send(400, "text/plain", "Data is not complete!");
-    
-        }
-
     });
     // Send a GET request to <IP>/get?message=<message>
     serverX.on("/get", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -251,7 +275,8 @@ EEPROM.put(100, myInternet);
             }
         }
         message += "total offset: " + String(mySetting.totalOffset, 2) + "\r\n";
-        message += "calculated total: " + String(sum + mySetting.totalOffset);
+        message += "calculated total: " + String(sum + mySetting.totalOffset)+ "\r\n";
+     message += "sampling periode: " + String(mySetting.samplingPeriod);
 
         //  EEPROM.put(2, mySetting);
         request->send(200, "text/plain", "Value:\r\n" + message);
@@ -269,46 +294,8 @@ EEPROM.put(100, myInternet);
     scales[1].begin(34, 13);
     scales[2].begin(33, 25);
     scales[3].begin(35, 32);
-    //scale.set_scale(2280.f);
     delay(100);
-    //    scales[0].tare();
-    //  scales[1].tare();
-    //  scales[2].tare();
-    //  scales[3].tare();
-
-    //test hx711
-    //SerialMon.print("fasf");
-    /*
-    while (true)
-    {
-        for (int i = 0; i < 4; i++)
-        {
-            if (scales[i].is_ready())
-            {
-                double reading = scales[i].get_value();
-
-                a[i] = reading;
-                //            SerialMon.print(i);
-                //          SerialMon.print(" HX711 reading: ");
-                //        SerialMon.println(reading);
-            }
-            else
-            {
-                SerialMon.print(i);
-                SerialMon.println("HX711 not found.");
-            }
-        }
-        SerialMon.print(a[0]);
-        SerialMon.print(" ");
-        SerialMon.print(a[1]);
-        SerialMon.print(" ");
-        SerialMon.print(a[2]);
-        SerialMon.print(" ");
-        SerialMon.println(a[3]);
-        //.//SerialMon.print(" ");
-
-        delay(1000);
-    }*/
+ 
     // Set-up modem reset, enable, power pins
     pinMode(MODEM_PWKEY, OUTPUT);
     pinMode(MODEM_RST, OUTPUT);
@@ -346,7 +333,7 @@ bailout:
     SerialMon.println("Initializing modem...");
     modem.restart();
     SerialMon.print("Waiting for network...");
-    if (!modem.waitForNetwork(240000L))
+    if (!modem.waitForNetwork(60000L))
     {
         SerialMon.println("fail");
         delay(10000);
@@ -361,6 +348,7 @@ bailout:
 
     SerialMon.print(F("Connecting to APN: "));
     SerialMon.print(myInternet.apn);
+    //try 5 timres
     if (!modem.gprsConnect(myInternet.apn, myInternet.user, myInternet.pass))
     {
         SerialMon.println(" fail");
@@ -448,9 +436,6 @@ bailout:
         SerialMon.println(F("Response:"));
         SerialMon.println(body);
 
-        SerialMon.print(F("Body length is: "));
-        SerialMon.println(body.length());
-
         // Shutdown
         http.stop();
         //    SerialMon.println(F("Server disconnected"));
@@ -459,7 +444,7 @@ bailout:
         //        SerialMon.println(F("GPRS disconnected"));
         //  while (true) {
         //semenit detk sekali
-        delay(30000);
+        delay(mySetting.samplingPeriod);
         //}
     }
 }
