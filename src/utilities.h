@@ -1,6 +1,6 @@
 #define IP5306_ADDR          0x75
 #define IP5306_REG_SYS_CTL0  0x00
-
+#include <Wire.h>
 bool setPowerBoostKeepOn(int en)
 {
   Wire.beginTransmission(IP5306_ADDR);
